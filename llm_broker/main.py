@@ -28,13 +28,16 @@ llm_request_duration = Histogram(
 llm_requests_total = Counter(
     "llm_broker_requests_total",
     "Total LLM requests processed",
-    ["model", "status"],  # status: success | error
+    ["model", "status"],
 )
 
 llm_queue_messages_total = Counter(
     "llm_broker_queue_messages_total",
     "Total messages consumed from RabbitMQ",
 )
+
+# shared channel for publishing responses
+publish_channel: aio_pika.Channel = None
 
 
 async def call_ollama(prompt: str, model: str) -> tuple[str, float]:
@@ -88,19 +91,19 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
 
         reply_to = message.reply_to or "llm_responses"
 
-        async with aio_pika.connect_robust(RABBITMQ_URL) as conn:
-            async with conn.channel() as ch:
-                await ch.default_exchange.publish(
-                    aio_pika.Message(
-                        body=response_body.encode(),
-                        correlation_id=message.correlation_id,
-                        delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                    ),
-                    routing_key=reply_to,
-                )
+        await publish_channel.default_exchange.publish(
+            aio_pika.Message(
+                body=response_body.encode(),
+                correlation_id=message.correlation_id,
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            ),
+            routing_key=reply_to,
+        )
 
 
 async def main() -> None:
+    global publish_channel
+
     log.info("starting metrics server on port %d", METRICS_PORT)
     Thread(target=start_http_server, args=(METRICS_PORT,), daemon=True).start()
 
@@ -108,10 +111,13 @@ async def main() -> None:
     connection = await aio_pika.connect_robust(RABBITMQ_URL)
 
     async with connection:
-        channel = await connection.channel()
-        await channel.set_qos(prefetch_count=1)
+        # separate channels for consuming and publishing — best practice
+        consume_channel = await connection.channel()
+        await consume_channel.set_qos(prefetch_count=1)
 
-        queue = await channel.declare_queue(REQUEST_QUEUE, durable=True)
+        publish_channel = await connection.channel()
+
+        queue = await consume_channel.declare_queue(REQUEST_QUEUE, durable=True)
         log.info("consuming from queue: %s", REQUEST_QUEUE)
 
         await queue.consume(on_request)
