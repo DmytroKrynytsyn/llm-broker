@@ -1,0 +1,6 @@
+apiVersion: v2
+name: llm-broker
+description: RabbitMQ-to-Ollama broker for LLM request routing
+type: application
+version: 0.1.0
+appVersion: "latest"
