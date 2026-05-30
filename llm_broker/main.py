@@ -36,8 +36,12 @@ llm_queue_messages_total = Counter(
     "Total messages consumed from RabbitMQ",
 )
 
-# shared channel for publishing responses
-publish_channel: aio_pika.Channel = None
+connection: aio_pika.RobustConnection = None
+
+
+async def get_publish_channel() -> aio_pika.Channel:
+    """Open a fresh channel on the current (possibly reconnected) connection."""
+    return await connection.channel()
 
 
 async def call_ollama(prompt: str, model: str) -> tuple[str, float]:
@@ -54,55 +58,63 @@ async def call_ollama(prompt: str, model: str) -> tuple[str, float]:
 
 
 async def on_request(message: aio_pika.IncomingMessage) -> None:
-    async with message.process(requeue=True):
-        body = json.loads(message.body)
-        prompt = body.get("prompt", "")
-        model = body.get("model", DEFAULT_MODEL)
-        request_id = body.get("request_id", message.correlation_id)
+    body = json.loads(message.body)
+    prompt = body.get("prompt", "")
+    model = body.get("model", DEFAULT_MODEL)
+    request_id = body.get("request_id", message.correlation_id)
+    reply_to = message.reply_to or "llm_responses"
 
-        llm_queue_messages_total.inc()
-        log.info("request_id=%s model=%s prompt_len=%d", request_id, model, len(prompt))
+    llm_queue_messages_total.inc()
+    log.info("request_id=%s model=%s prompt_len=%d", request_id, model, len(prompt))
 
-        try:
-            with llm_request_duration.labels(model=model).time():
-                result, duration = await call_ollama(prompt, model)
+    try:
+        with llm_request_duration.labels(model=model).time():
+            result, duration = await call_ollama(prompt, model)
 
-            llm_requests_total.labels(model=model, status="success").inc()
-            log.info("request_id=%s model=%s done in %.1fs", request_id, model, duration)
+        llm_requests_total.labels(model=model, status="success").inc()
+        log.info("request_id=%s model=%s done in %.1fs", request_id, model, duration)
 
-            response_body = json.dumps({
-                "result": result,
-                "request_id": request_id,
-                "model_used": model,
-                "duration_seconds": round(duration, 2),
-                "error": None,
-            })
+        response_body = json.dumps({
+            "result": result,
+            "request_id": request_id,
+            "model_used": model,
+            "duration_seconds": round(duration, 2),
+            "error": None,
+        })
 
-        except Exception as e:
-            llm_requests_total.labels(model=model, status="error").inc()
-            log.error("request_id=%s model=%s error=%s", request_id, model, e)
-            response_body = json.dumps({
-                "result": None,
-                "request_id": request_id,
-                "model_used": model,
-                "duration_seconds": None,
-                "error": str(e),
-            })
+    except Exception as e:
+        llm_requests_total.labels(model=model, status="error").inc()
+        log.error("request_id=%s model=%s error=%s", request_id, model, e)
+        response_body = json.dumps({
+            "result": None,
+            "request_id": request_id,
+            "model_used": model,
+            "duration_seconds": None,
+            "error": str(e),
+        })
 
-        reply_to = message.reply_to or "llm_responses"
+    # publish response — open a fresh channel, works even after reconnect
+    try:
+        ch = await get_publish_channel()
+        async with ch:
+            await ch.default_exchange.publish(
+                aio_pika.Message(
+                    body=response_body.encode(),
+                    correlation_id=message.correlation_id,
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                ),
+                routing_key=reply_to,
+            )
+    except Exception as e:
+        log.error("request_id=%s publish_error=%s", request_id, e)
+        await message.nack(requeue=True)
+        return
 
-        await publish_channel.default_exchange.publish(
-            aio_pika.Message(
-                body=response_body.encode(),
-                correlation_id=message.correlation_id,
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-            ),
-            routing_key=reply_to,
-        )
+    await message.ack()
 
 
 async def main() -> None:
-    global publish_channel
+    global connection
 
     log.info("starting metrics server on port %d", METRICS_PORT)
     Thread(target=start_http_server, args=(METRICS_PORT,), daemon=True).start()
@@ -111,11 +123,8 @@ async def main() -> None:
     connection = await aio_pika.connect_robust(RABBITMQ_URL)
 
     async with connection:
-        # separate channels for consuming and publishing — best practice
         consume_channel = await connection.channel()
         await consume_channel.set_qos(prefetch_count=1)
-
-        publish_channel = await connection.channel()
 
         queue = await consume_channel.declare_queue(REQUEST_QUEUE, durable=True)
         log.info("consuming from queue: %s", REQUEST_QUEUE)
