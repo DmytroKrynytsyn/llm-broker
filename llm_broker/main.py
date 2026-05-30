@@ -36,11 +36,13 @@ llm_queue_messages_total = Counter(
     "Total messages consumed from RabbitMQ",
 )
 
+# known broker fields — everything else is passed through to the response
+BROKER_FIELDS = {"prompt", "model", "request_id"}
+
 connection: aio_pika.RobustConnection = None
 
 
 async def get_publish_channel() -> aio_pika.Channel:
-    """Open a fresh channel on the current (possibly reconnected) connection."""
     return await connection.channel()
 
 
@@ -64,6 +66,9 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
     request_id = body.get("request_id", message.correlation_id)
     reply_to = message.reply_to or "llm_responses"
 
+    # passthrough fields — anything the caller added beyond broker fields
+    passthrough = {k: v for k, v in body.items() if k not in BROKER_FIELDS}
+
     llm_queue_messages_total.inc()
     log.info("request_id=%s model=%s prompt_len=%d", request_id, model, len(prompt))
 
@@ -80,6 +85,7 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
             "model_used": model,
             "duration_seconds": round(duration, 2),
             "error": None,
+            **passthrough,
         })
 
     except Exception as e:
@@ -91,9 +97,9 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
             "model_used": model,
             "duration_seconds": None,
             "error": str(e),
+            **passthrough,
         })
 
-    # publish response — open a fresh channel, works even after reconnect
     try:
         ch = await get_publish_channel()
         async with ch:
