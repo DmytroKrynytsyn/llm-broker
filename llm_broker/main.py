@@ -14,7 +14,6 @@ log = logging.getLogger(__name__)
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq.rabbitmq.svc.cluster.local/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://kbrain2:11434")
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "qwen3:30b-a3b-instruct-2507-q4_K_M")
 REQUEST_QUEUE = "llm_requests"
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "1800"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
@@ -37,9 +36,10 @@ llm_queue_messages_total = Counter(
 )
 
 # known broker fields — everything else is passed through to the response
-BROKER_FIELDS = {"prompt", "model", "request_id"}
+BROKER_FIELDS = {"prompt", "request_id"}
 
 connection: aio_pika.RobustConnection = None
+ollama_model: str = ""
 
 
 async def get_publish_channel() -> aio_pika.Channel:
@@ -62,7 +62,7 @@ async def call_ollama(prompt: str, model: str) -> tuple[str, float]:
 async def on_request(message: aio_pika.IncomingMessage) -> None:
     body = json.loads(message.body)
     prompt = body.get("prompt", "")
-    model = body.get("model", DEFAULT_MODEL)
+    model = ollama_model
     request_id = body.get("request_id", message.correlation_id)
     reply_to = message.reply_to or "llm_responses"
 
@@ -120,10 +120,16 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
 
 
 async def main() -> None:
-    global connection
+    global connection, ollama_model
 
     log.info("starting metrics server on port %d", METRICS_PORT)
     Thread(target=start_http_server, args=(METRICS_PORT,), daemon=True).start()
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{OLLAMA_URL}/api/tags")
+        resp.raise_for_status()
+        ollama_model = resp.json()["models"][0]["name"]
+    log.info("detected ollama model: %s", ollama_model)
 
     log.info("connecting to RabbitMQ at %s", RABBITMQ_URL)
     connection = await aio_pika.connect_robust(RABBITMQ_URL)
