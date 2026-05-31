@@ -12,7 +12,7 @@ Any app publishes to `llm_requests`, llm-broker calls Ollama, responds to `reply
 ```json
 {
   "prompt": "summarize this...",
-  "model": "qwen2.5:32b-instruct-q2_K",
+  "model": "qwen3:30b-a3b-instruct-2507-q4_K_M",
   "request_id": "uuid"
 }
 ```
@@ -23,7 +23,7 @@ Any app publishes to `llm_requests`, llm-broker calls Ollama, responds to `reply
 {
   "result": "...",
   "request_id": "uuid",
-  "model_used": "qwen2.5:32b-instruct-q2_K",
+  "model_used": "qwen3:30b-a3b-instruct-2507-q4_K_M",
   "duration_seconds": 12.4,
   "error": null
 }
