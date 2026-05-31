@@ -1,6 +1,6 @@
 image:
   repository: dkrinitsyn/llm-broker
-  tag: "20260531184725"
+  tag: "20260531185021"
   pullPolicy: Always
 
 replicaCount: 1
