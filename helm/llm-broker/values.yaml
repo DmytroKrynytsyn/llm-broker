@@ -8,7 +8,7 @@ replicaCount: 1
 env:
   RABBITMQ_URL: "amqp://guest:guest@rabbitmq.rabbitmq.svc.cluster.local/"
   OLLAMA_URL: "http://kbrain2:11434"
-OLLAMA_TIMEOUT: "1800"
+  OLLAMA_TIMEOUT: "1800"
   METRICS_PORT: "8000"
 
 namespace: llm-broker
