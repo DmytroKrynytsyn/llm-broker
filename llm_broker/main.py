@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq.rabbitmq.svc.cluster.local/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://kbrain2:11434")
 REQUEST_QUEUE = "llm_requests"
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "3600"))
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "7200"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
 
 llm_request_duration = Histogram(
