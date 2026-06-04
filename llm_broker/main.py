@@ -51,7 +51,7 @@ async def call_ollama(prompt: str, model: str) -> tuple[str, float]:
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
         response = await client.post(
             f"{OLLAMA_URL}/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
+            json={"model": model, "prompt": prompt, "think": False, "stream": False},
         )
         response.raise_for_status()
         result = response.json()["response"]
