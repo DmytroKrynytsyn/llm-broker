@@ -70,7 +70,6 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
     passthrough = {k: v for k, v in body.items() if k not in BROKER_FIELDS}
 
     llm_queue_messages_total.inc()
-    await message.ack()
     log.info("request_id=%s model=%s prompt_len=%d", request_id, model, len(prompt))
 
     try:
@@ -114,6 +113,8 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
             )
     except Exception as e:
         log.error("request_id=%s publish_error=%s", request_id, e)
+
+    await message.ack()
 
 
 async def main() -> None:
