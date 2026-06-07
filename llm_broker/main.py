@@ -60,7 +60,13 @@ async def call_ollama(prompt: str, model: str) -> tuple[str, float]:
 
 
 async def on_request(message: aio_pika.IncomingMessage) -> None:
-    body = json.loads(message.body)
+    try:
+        body = json.loads(message.body)
+    except Exception as e:
+        log.error("invalid message body: %s", e)
+        await message.ack()
+        return
+
     prompt = body.get("prompt", "")
     model = ollama_model
     request_id = body.get("request_id", message.correlation_id)
@@ -71,6 +77,8 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
 
     llm_queue_messages_total.inc()
     log.info("request_id=%s model=%s prompt_len=%d", request_id, model, len(prompt))
+
+    await message.ack()
 
     try:
         with llm_request_duration.labels(model=model).time():
@@ -114,8 +122,6 @@ async def on_request(message: aio_pika.IncomingMessage) -> None:
     except Exception as e:
         log.error("request_id=%s publish_error=%s", request_id, e)
 
-    await message.ack()
-
 
 async def main() -> None:
     global connection, ollama_model
@@ -138,9 +144,9 @@ async def main() -> None:
 
         queue = await consume_channel.declare_queue(REQUEST_QUEUE, durable=True)
         log.info("consuming from queue: %s", REQUEST_QUEUE)
-
-        await queue.consume(on_request)
-        await asyncio.Future()
+        async with queue.iterator() as messages:
+            async for message in messages:
+                await on_request(message)
 
 
 if __name__ == "__main__":
